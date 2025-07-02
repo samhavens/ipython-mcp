@@ -49,15 +49,38 @@ For first-time users, the fastest way to get started:
 
 ## Installation
 
-### For Claude CLI
+### Lightweight Installation (Claude CLI only)
 
-Run directly with Python (no pip installation required):
+Run directly with uv (no pip installation required, may be slower on startup; best for trying it out at first):
 
 ```bash
-claude mcp add ipython-kernel "python -m ipython_mcp"
+claude mcp add ipython-kernel "uv run ipython_mcp/server.py"
 ```
 
-### For Claude Desktop
+### Full Installation
+
+#### pip (recommended for regular use)
+
+```bash
+pip install ipython-mcp
+```
+
+*Note: Consider using a virtual environment to avoid dependency conflicts:*
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install ipython-mcp
+```
+
+##### Adding to Claude CLI
+
+After installation:
+
+```bash
+claude mcp add ipython-kernel ipython-mcp
+```
+
+##### Adding to Claude Desktop
 
 Add to your Claude Desktop configuration file:
 
@@ -65,8 +88,24 @@ Add to your Claude Desktop configuration file:
 {
   "mcpServers": {
     "ipython-kernel": {
-      "command": "python",
-      "args": ["-m", "ipython_mcp"]
+      "command": "ipython-mcp"
+    }
+  }
+}
+```
+
+For uv-based installation:
+```json
+{
+  "mcpServers": {
+    "ipython-kernel": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/absolute/path/to/ipython-mcp",
+        "run",
+        "ipython_mcp/server.py"
+      ]
     }
   }
 }
