@@ -24,5 +24,9 @@ dependencies = [
 [project.scripts]
 ipython-mcp = "ipython_mcp.server:main"
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ipython_mcp*"]
+
 [tool.setuptools.package-data]
 ipython_mcp = ["*.json"]

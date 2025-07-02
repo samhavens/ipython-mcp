@@ -27,7 +27,7 @@ For first-time users, the fastest way to get started:
 
 2. **Add ipython-mcp to Claude CLI**:
    ```bash
-   claude mcp add ipython-kernel "python -m ipython_mcp"
+   claude mcp add ipython-kernel "uv run ipython_mcp/server.py"
    ```
 
 3. **Start using Claude CLI**:
