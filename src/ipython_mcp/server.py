@@ -13,6 +13,11 @@ import uuid
 import hmac
 import hashlib
 import time
+import subprocess
+import tempfile
+import os
+import signal
+from importlib import resources
 from datetime import datetime
 from pathlib import Path
 
@@ -25,6 +30,39 @@ context = None
 shell_socket = None
 iopub_socket = None
 
+# Global kernel process state
+kernel_process = None
+kernel_pid_file = None
+
+
+def resolve_connection_file(connection_file: str = None) -> str:
+    """
+    Resolve connection file with priority: param > env var > package default
+    
+    Args:
+        connection_file: Explicit connection file path (highest priority)
+        
+    Returns:
+        Resolved connection file path
+    """
+    # Priority 1: Explicit parameter
+    if connection_file:
+        return connection_file
+    
+    # Priority 2: Environment variable
+    env_connection = os.environ.get('IPYTHON_MCP_CONNECTION')
+    if env_connection:
+        return env_connection
+    
+    # Priority 3: Package default
+    try:
+        import ipython_mcp
+        return str(resources.files(ipython_mcp) / 'default_connection.json')
+    except Exception:
+        # Fallback for development/editable installs
+        package_dir = Path(__file__).parent
+        return str(package_dir / 'default_connection.json')
+
 
 def sign_message(msg_lst, key):
     """Sign a message with HMAC"""
@@ -35,12 +73,79 @@ def sign_message(msg_lst, key):
 
 
 @mcp.tool()
-def connect_to_kernel(connection_file: str) -> str:
+def start_kernel(connection_file: str = None) -> str:
+    """
+    Start a new IPython kernel using a connection file and automatically connect to it.
+    
+    Args:
+        connection_file: Path to connection file to use (optional)
+                        If not provided, uses IPYTHON_MCP_CONNECTION env var or package default
+        
+    Returns:
+        Status message with connection details
+    """
+    global kernel_process, kernel_pid_file
+    
+    try:
+        # Resolve connection file using priority logic
+        resolved_file = resolve_connection_file(connection_file)
+        connection_path = Path(resolved_file).expanduser()
+        
+        if not connection_path.exists():
+            return f"❌ Connection file not found: {connection_path}"
+        
+        # Start IPython kernel in background using the connection file
+        cmd = [
+            "ipython", "kernel",
+            f"--ConnectionFileMixin.connection_file={connection_path}"
+        ]
+        
+        # Start process detached (won't die when MCP server closes)
+        kernel_process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,  # Detach from parent process
+        )
+        
+        # Save PID for later cleanup
+        temp_dir = tempfile.mkdtemp(prefix="ipython-mcp-")
+        kernel_pid_file = os.path.join(temp_dir, f"kernel-{kernel_process.pid}.pid")
+        with open(kernel_pid_file, 'w') as f:
+            f.write(str(kernel_process.pid))
+        
+        # Wait a moment for kernel to start
+        time.sleep(2)
+        
+        # Check if kernel started successfully
+        if kernel_process.poll() is not None:
+            stdout, stderr = kernel_process.communicate()
+            stdout_text = stdout.decode('utf-8') if stdout else ""
+            stderr_text = stderr.decode('utf-8') if stderr else ""
+            error_details = f"Exit code: {kernel_process.returncode}"
+            if stdout_text:
+                error_details += f"\nStdout: {stdout_text}"
+            if stderr_text:
+                error_details += f"\nStderr: {stderr_text}"
+            return f"❌ Kernel failed to start\n{error_details}"
+        
+        # Auto-connect to the kernel
+        connect_result = connect_to_kernel(str(connection_path))
+        
+        return f"✅ Started IPython kernel (PID: {kernel_process.pid})\n📁 Using connection file: {connection_path}\n💾 PID file: {kernel_pid_file}\n{connect_result}"
+        
+    except Exception as e:
+        return f"❌ Failed to start kernel: {str(e)}"
+
+
+@mcp.tool()
+def connect_to_kernel(connection_file: str = None) -> str:
     """
     Connect to an existing IPython kernel using its connection file.
     
     Args:
-        connection_file: Path to the kernel connection JSON file
+        connection_file: Path to the kernel connection JSON file (optional)
+                        If not provided, uses IPYTHON_MCP_CONNECTION env var or package default
         
     Returns:
         Connection status message
@@ -48,13 +153,21 @@ def connect_to_kernel(connection_file: str) -> str:
     global kernel_connection, context, shell_socket, iopub_socket
     
     try:
-        # Read connection file
-        connection_path = Path(connection_file).expanduser()
+        # Resolve connection file using priority logic
+        resolved_file = resolve_connection_file(connection_file)
+        connection_path = Path(resolved_file).expanduser()
+        
         if not connection_path.exists():
             return f"❌ Connection file not found: {connection_path}"
         
         with open(connection_path, 'r') as f:
             kernel_connection = json.load(f)
+            
+        # Validate connection file has required fields
+        required_fields = ['ip', 'shell_port', 'iopub_port', 'stdin_port', 'control_port', 'hb_port', 'key']
+        missing_fields = [field for field in required_fields if field not in kernel_connection]
+        if missing_fields:
+            return f"❌ Connection file missing required fields: {missing_fields}"
         
         # Close existing connections if any
         if shell_socket:
@@ -70,15 +183,21 @@ def connect_to_kernel(connection_file: str) -> str:
         # Shell socket for sending requests
         shell_socket = context.socket(zmq.DEALER)
         shell_addr = f"tcp://{kernel_connection['ip']}:{kernel_connection['shell_port']}"
-        shell_socket.connect(shell_addr)
+        try:
+            shell_socket.connect(shell_addr)
+        except Exception as e:
+            return f"❌ Failed to connect to shell socket {shell_addr}: {str(e)}"
         
         # IOPub socket for receiving output
         iopub_socket = context.socket(zmq.SUB)
         iopub_addr = f"tcp://{kernel_connection['ip']}:{kernel_connection['iopub_port']}"
-        iopub_socket.connect(iopub_addr)
-        iopub_socket.setsockopt(zmq.SUBSCRIBE, b'')
+        try:
+            iopub_socket.connect(iopub_addr)
+            iopub_socket.setsockopt(zmq.SUBSCRIBE, b'')
+        except Exception as e:
+            return f"❌ Failed to connect to iopub socket {iopub_addr}: {str(e)}"
         
-        return f"✅ Connected to IPython kernel at {kernel_connection['ip']}:{kernel_connection['shell_port']}"
+        return f"✅ Connected to IPython kernel at {kernel_connection['ip']}:{kernel_connection['shell_port']}\n📁 Connection file: {connection_path}\n🔑 Using key: {kernel_connection['key'][:8]}..."
         
     except Exception as e:
         return f"❌ Failed to connect: {str(e)}"
@@ -158,7 +277,12 @@ def execute_code(code: str) -> str:
                 msg = iopub_socket.recv_multipart(zmq.NOBLOCK)
                 if len(msg) >= 7:
                     header = json.loads(msg[3])
+                    parent_header = json.loads(msg[4]) if len(msg) > 4 and msg[4] else {}
                     content = json.loads(msg[6])
+                    
+                    # Only process messages that are replies to our request
+                    if parent_header.get('msg_id') != msg_id:
+                        continue
                     
                     msg_type = header.get('msg_type')
                     
@@ -267,5 +391,13 @@ def disconnect_kernel() -> str:
         return f"❌ Error during disconnection: {str(e)}"
 
 
-if __name__ == "__main__":
+def main():
+    """Main entry point for the MCP server"""
+    # Clean shutdown on signals
+    signal.signal(signal.SIGTERM, lambda sig, frame: disconnect_kernel())
+    signal.signal(signal.SIGINT, lambda sig, frame: disconnect_kernel())
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()

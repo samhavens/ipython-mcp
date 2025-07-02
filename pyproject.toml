@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ipython-mcp"
+version = "0.1.0"
+description = "MCP Server for IPython kernel integration"
+authors = [{name = "Gabi Teodoru", email = "gabiteodoru@gmail.com"}]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "mcp",
+    "pyzmq",
+    "ipython",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/gabiteodoru/ipython-mcp"
+"Bug Tracker" = "https://github.com/gabiteodoru/ipython-mcp/issues"
+"Source Code" = "https://github.com/gabiteodoru/ipython-mcp"
+
+[project.scripts]
+ipython-mcp = "ipython_mcp.server:main"
+
+[tool.setuptools.package-data]
+ipython_mcp = ["*.json"]
