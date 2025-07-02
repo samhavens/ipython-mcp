@@ -14,8 +14,7 @@ MCP is an open protocol created by Anthropic that enables AI systems to interact
 ## Requirements
 
 - Python 3.8+
-- IPython/Jupyter installed
-- `zmq` and `mcp` Python packages
+- `ipython`, `zmq` and `mcp` Python packages
 
 ## Quick Start
 
@@ -28,7 +27,7 @@ For first-time users, the fastest way to get started:
 
 2. **Add ipython-mcp to Claude CLI**:
    ```bash
-   claude mcp add ipython-kernel python /home/gabi/ipython-mcp/ipython_mcp_server.py
+   claude mcp add ipython-kernel "python -m ipython_mcp"
    ```
 
 3. **Start using Claude CLI**:
@@ -55,7 +54,7 @@ For first-time users, the fastest way to get started:
 Run directly with Python (no pip installation required):
 
 ```bash
-claude mcp add ipython-kernel python /home/gabi/ipython-mcp/ipython_mcp_server.py
+claude mcp add ipython-kernel "python -m ipython_mcp"
 ```
 
 ### For Claude Desktop
@@ -67,7 +66,7 @@ Add to your Claude Desktop configuration file:
   "mcpServers": {
     "ipython-kernel": {
       "command": "python",
-      "args": ["/home/gabi/ipython-mcp/ipython_mcp_server.py"]
+      "args": ["-m", "ipython_mcp"]
     }
   }
 }
