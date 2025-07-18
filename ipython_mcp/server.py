@@ -34,6 +34,9 @@ iopub_socket = None
 kernel_process = None
 kernel_pid_file = None
 
+# Track non-blocking executions
+pending_executions = {}
+
 
 def resolve_connection_file(connection_file: str = None) -> str:
     """
@@ -70,6 +73,68 @@ def sign_message(msg_lst, key):
     for m in msg_lst:
         h.update(m)
     return h.hexdigest().encode('utf-8')
+
+
+def _process_iopub_messages():
+    """Collect pending messages from the IOPub socket for non-blocking executions."""
+    global pending_executions, iopub_socket
+
+    if not iopub_socket or not pending_executions:
+        return
+
+    while True:
+        try:
+            msg = iopub_socket.recv_multipart(zmq.NOBLOCK)
+        except zmq.Again:
+            break
+
+        if len(msg) < 7:
+            continue
+
+        header = json.loads(msg[3])
+        parent_header = json.loads(msg[4]) if len(msg) > 4 and msg[4] else {}
+        content = json.loads(msg[6])
+
+        msg_id = parent_header.get("msg_id")
+        if msg_id not in pending_executions:
+            continue
+
+        exec_state = pending_executions[msg_id]
+        msg_type = header.get("msg_type")
+
+        if msg_type == "execute_result":
+            result = content.get("data", {}).get("text/plain", "")
+            if result:
+                exec_state["results"].append(result)
+
+        elif msg_type == "stream":
+            stream_text = content.get("text", "").strip()
+            if stream_text:
+                exec_state["streams"].append(stream_text)
+
+        elif msg_type == "error":
+            error_name = content.get("ename", "Error")
+            error_value = content.get("evalue", "")
+            traceback = content.get("traceback", [])
+
+            error_msg = f"{error_name}: {error_value}"
+            if traceback:
+                clean_traceback = []
+                for line in traceback:
+                    clean_line = (
+                        line.replace("\x1b[0;31m", "")
+                        .replace("\x1b[0m", "")
+                        .replace("\x1b[1;32m", "")
+                        .replace("\x1b[0;32m", "")
+                    )
+                    clean_traceback.append(clean_line)
+                error_msg += "\n" + "\n".join(clean_traceback)
+            exec_state["errors"].append(error_msg)
+
+        elif msg_type == "status":
+            if content.get("execution_state") == "idle":
+                exec_state["done"] = True
+
 
 
 @mcp.tool()
@@ -342,9 +407,102 @@ def execute_code(code: str) -> str:
             return "✅ Code executed successfully (no output)"
         
         return "\n".join(output_parts)
-        
+
     except Exception as e:
         return f"❌ Execution failed: {str(e)}"
+
+
+@mcp.tool()
+def execute_code_nonblocking(code: str) -> str:
+    """Send code to the kernel and return immediately with an execution id."""
+    global kernel_connection, shell_socket, pending_executions
+
+    if not kernel_connection or not shell_socket:
+        return "❌ Not connected to kernel. Use connect_to_kernel() first."
+
+    try:
+        msg_id = str(uuid.uuid4())
+        session_id = str(uuid.uuid4())
+
+        header = {
+            "msg_id": msg_id,
+            "username": "ipython-mcp",
+            "session": session_id,
+            "date": datetime.now().isoformat(),
+            "msg_type": "execute_request",
+            "version": "5.3",
+        }
+
+        content = {
+            "code": code,
+            "silent": False,
+            "store_history": True,
+            "user_expressions": {},
+            "allow_stdin": False,
+            "stop_on_error": True,
+        }
+
+        msg_parts = [
+            json.dumps(header).encode("utf-8"),
+            b"{}",
+            b"{}",
+            json.dumps(content).encode("utf-8"),
+        ]
+
+        signature = sign_message(msg_parts, kernel_connection["key"])
+
+        shell_socket.send_multipart(
+            [b"", b"<IDS|MSG>", signature, msg_parts[0], msg_parts[1], msg_parts[2], msg_parts[3]]
+        )
+
+        pending_executions[msg_id] = {
+            "results": [],
+            "streams": [],
+            "errors": [],
+            "done": False,
+        }
+
+        return f"✅ Started execution {msg_id}"
+
+    except Exception as e:
+        return f"❌ Execution start failed: {str(e)}"
+
+
+@mcp.tool()
+def check_execution(msg_id: str) -> str:
+    """Return output for a non-blocking execution if available."""
+    global pending_executions
+
+    if msg_id not in pending_executions:
+        return "❌ Unknown execution id"
+
+    _process_iopub_messages()
+
+    state = pending_executions[msg_id]
+
+    output_parts = []
+    output_parts.extend(state["streams"])
+    output_parts.extend(state["results"])
+    for err in state["errors"]:
+        output_parts.append(f"❌ {err}")
+
+    if state["done"]:
+        del pending_executions[msg_id]
+        if not output_parts:
+            return "✅ Code executed successfully (no output)"
+        return "\n".join(output_parts)
+
+    if not output_parts:
+        return "⏳ Execution in progress"
+    return "\n".join(output_parts) + "\n⏳ Execution in progress"
+
+
+@mcp.tool()
+def variable_exists(var_name: str) -> str:
+    """Check if a variable with the given name exists in the kernel."""
+    code = f"print('true' if '{var_name}' in globals() else 'false')"
+    result = execute_code(code)
+    return result.strip()
 
 
 @mcp.tool()
