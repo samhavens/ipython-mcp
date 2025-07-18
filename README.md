@@ -155,9 +155,12 @@ ls ~/.local/share/jupyter/runtime/
 
 1. `start_kernel(connection_file=None)` - Start new IPython kernel and auto-connect
 2. `connect_to_kernel(connection_file=None)` - Connect to existing IPython kernel
-3. `execute_code(code)` - Execute Python code on the connected kernel  
-4. `kernel_status()` - Check current connection status
-5. `disconnect_kernel()` - Disconnect from current kernel
+3. `execute_code(code)` - Execute Python code and wait for results
+4. `execute_code_nonblocking(code)` - Start execution and return an ID immediately
+5. `check_execution(msg_id)` - Fetch output for a non-blocking execution
+6. `variable_exists(var_name)` - Check if a variable exists in the kernel
+7. `kernel_status()` - Check current connection status
+8. `disconnect_kernel()` - Disconnect from current kernel
 
 ### Connection File Resolution
 
