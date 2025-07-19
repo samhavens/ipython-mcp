@@ -27,7 +27,7 @@ For first-time users, the fastest way to get started:
 
 2. **Install and add ipython-mcp to Claude CLI**:
    ```bash
-   uv tool install ipython-mcp
+   uv tool install git+https://github.com/samhavens/ipython-mcp.git
    claude mcp add ipython-kernel ipython-mcp
    ```
 
@@ -50,20 +50,22 @@ For first-time users, the fastest way to get started:
 
 ## Installation
 
-### uv tool install (recommended)
+### Install from GitHub (recommended)
 
-The preferred method using uv tool for isolated installation:
+Install the latest version directly from this repository:
 
 ```bash
-uv tool install ipython-mcp
+uv tool install git+https://github.com/samhavens/ipython-mcp.git
 claude mcp add ipython-kernel ipython-mcp
 ```
 
-### Alternative: pip install
+### Alternative: PyPI install
 
 ```bash
-pip install ipython-mcp
+uv tool install ipython-mcp  # or: pip install ipython-mcp
 ```
+
+**Note**: The PyPI version may be behind the latest GitHub version with bug fixes and new features.
 
 *Note: Consider using a virtual environment to avoid dependency conflicts:*
 ```bash
