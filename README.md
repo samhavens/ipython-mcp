@@ -25,9 +25,10 @@ For first-time users, the fastest way to get started:
    ipython kernel
    ```
 
-2. **Add ipython-mcp to Claude CLI**:
+2. **Install and add ipython-mcp to Claude CLI**:
    ```bash
-   claude mcp add ipython-kernel "uv run ipython_mcp/server.py"
+   uv tool install ipython-mcp
+   claude mcp add ipython-kernel ipython-mcp
    ```
 
 3. **Start using Claude CLI**:
@@ -49,17 +50,16 @@ For first-time users, the fastest way to get started:
 
 ## Installation
 
-### Lightweight Installation (Claude CLI only)
+### uv tool install (recommended)
 
-Run directly with uv (no pip installation required, may be slower on startup; best for trying it out at first):
+The preferred method using uv tool for isolated installation:
 
 ```bash
-claude mcp add ipython-kernel "uv run ipython_mcp/server.py"
+uv tool install ipython-mcp
+claude mcp add ipython-kernel ipython-mcp
 ```
 
-### Full Installation
-
-#### pip (recommended for regular use)
+### Alternative: pip install
 
 ```bash
 pip install ipython-mcp
@@ -74,10 +74,17 @@ pip install ipython-mcp
 
 ##### Adding to Claude CLI
 
-After installation:
+After pip installation:
 
 ```bash
 claude mcp add ipython-kernel ipython-mcp
+```
+
+**Note**: If you encounter issues with multiple installations (pip vs uv), ensure you're using the correct path:
+
+```bash
+# For uv tool installation, use full path to avoid conflicts
+claude mcp add ipython-kernel /path/to/.local/share/uv/tools/ipython-mcp/bin/ipython-mcp
 ```
 
 ##### Adding to Claude Desktop
@@ -156,11 +163,31 @@ ls ~/.local/share/jupyter/runtime/
 1. `start_kernel(connection_file=None)` - Start new IPython kernel and auto-connect
 2. `connect_to_kernel(connection_file=None)` - Connect to existing IPython kernel
 3. `execute_code(code)` - Execute Python code and wait for results
-4. `execute_code_nonblocking(code)` - Start execution and return an ID immediately
-5. `check_execution(msg_id)` - Fetch output for a non-blocking execution
+4. `execute_code_nonblocking(code)` - **[Async]** Start execution and return an ID immediately
+5. `check_execution(msg_id)` - **[Async]** Fetch output for a non-blocking execution
 6. `variable_exists(var_name)` - Check if a variable exists in the kernel
 7. `kernel_status()` - Check current connection status
 8. `disconnect_kernel()` - Disconnect from current kernel
+
+#### Asynchronous Code Execution
+
+The server supports **non-blocking code execution** for long-running operations:
+
+```python
+# Start long-running code without blocking
+msg_id = execute_code_nonblocking("import time; time.sleep(10); print('done')")
+
+# Check if execution is complete
+result = check_execution(msg_id)
+# Returns "PENDING" if still running, or actual output when complete
+```
+
+This is particularly useful for:
+- Large dataset processing
+- Model training
+- File I/O operations
+- Network requests
+- Any computation that takes more than a few seconds
 
 ### Connection File Resolution
 
