@@ -271,13 +271,17 @@ def connect_to_kernel(connection_file: str = None) -> str:
 @mcp.tool()
 def execute_code(code: str) -> str:
     """
-    Execute Python code on the connected IPython kernel.
+    Execute Python code on the IPython kernel and WAIT for completion.
+    
+    ⚠️  WARNING: This will BLOCK until execution finishes with ~1 second timeout. 
+    If timeout occurs, returns explicit timeout warning. Use execute_code_nonblocking 
+    for long-running operations like file downloads, ML training, large data processing.
     
     Args:
         code: Python code to execute
         
     Returns:
-        Execution results including output, results, and any errors
+        Complete execution results if finished, or timeout warning with any partial output
     """
     global kernel_connection, shell_socket, iopub_socket
     
@@ -388,7 +392,26 @@ def execute_code(code: str) -> str:
                 timeout_count += 1
                 time.sleep(0.01)
         
-        # Format output
+        # Check if execution timed out
+        if not execution_done:
+            # Execution timed out - be explicit about it
+            timeout_msg = "⚠️ Execution timed out after ~1 second. Code may still be running in background."
+            
+            # Include any partial output we got
+            output_parts = []
+            for stream in streams:
+                output_parts.append(stream)
+            for result in results:
+                output_parts.append(result)
+            for error in errors:
+                output_parts.append(f"❌ {error}")
+            
+            if output_parts:
+                return f"{timeout_msg}\n\nPartial output:\n" + "\n".join(output_parts)
+            else:
+                return f"{timeout_msg} Use execute_code_nonblocking for long operations."
+        
+        # Format output for successful completion
         output_parts = []
         
         # Add streams (print output)
@@ -414,7 +437,18 @@ def execute_code(code: str) -> str:
 
 @mcp.tool()
 def execute_code_nonblocking(code: str) -> str:
-    """Send code to the kernel and return immediately with an execution id."""
+    """
+    Start Python code execution and return immediately with tracking ID.
+    
+    Use this for long-running operations (>1 second) like file downloads, ML training, 
+    large data processing. Follow up with check_execution(msg_id) to get results when ready.
+    
+    Args:
+        code: Python code to execute
+        
+    Returns:
+        Execution ID (msg_id) for use with check_execution() to track progress and get results
+    """
     global kernel_connection, shell_socket, pending_executions
 
     if not kernel_connection or not shell_socket:
@@ -470,7 +504,17 @@ def execute_code_nonblocking(code: str) -> str:
 
 @mcp.tool()
 def check_execution(msg_id: str) -> str:
-    """Return output for a non-blocking execution if available."""
+    """
+    Check status and results of non-blocking execution.
+    
+    Args:
+        msg_id: Execution ID returned by execute_code_nonblocking()
+    
+    Returns:
+        - "⏳ Execution in progress" if still running
+        - Complete execution results if finished (includes output, results, errors)
+        - "❌ Unknown execution id" if msg_id not found
+    """
     global pending_executions
 
     if msg_id not in pending_executions:
@@ -499,9 +543,22 @@ def check_execution(msg_id: str) -> str:
 
 @mcp.tool()
 def variable_exists(var_name: str) -> str:
-    """Check if a variable with the given name exists in the kernel."""
+    """
+    Check if a variable with the given name exists in the kernel.
+    
+    Args:
+        var_name: Name of the variable to check
+        
+    Returns:
+        "true" if variable exists, "false" if not, or timeout warning if execution failed
+    """
     code = f"print('true' if '{var_name}' in globals() else 'false')"
     result = execute_code(code)
+    
+    # If timeout occurred, return the timeout message as-is
+    if "timed out" in result:
+        return result
+    
     return result.strip()
 
 
@@ -510,8 +567,11 @@ def kernel_status() -> str:
     """
     Get the current kernel connection status.
     
+    Use this to check if you're connected before running code, or to troubleshoot
+    connection issues when execute_code fails.
+    
     Returns:
-        Status information about the kernel connection
+        "✅ Connected to kernel at IP:port" if connected, or "❌ Not connected to any kernel"
     """
     global kernel_connection
     
@@ -524,10 +584,14 @@ def kernel_status() -> str:
 @mcp.tool()
 def disconnect_kernel() -> str:
     """
-    Disconnect from the current kernel.
+    Disconnect from the current kernel and close all connections.
+    
+    This closes sockets and clears connection state. The kernel process itself 
+    continues running - use this to clean up connections, not to stop the kernel.
+    You'll need to reconnect with connect_to_kernel() to use code execution again.
     
     Returns:
-        Disconnection status message
+        "✅ Disconnected from kernel" on success, or error message if disconnect fails
     """
     global kernel_connection, context, shell_socket, iopub_socket
     
