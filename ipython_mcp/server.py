@@ -29,6 +29,7 @@ kernel_connection = None
 context = None
 shell_socket = None
 iopub_socket = None
+control_socket = None
 
 # Global kernel process state
 kernel_process = None
@@ -215,7 +216,7 @@ def connect_to_kernel(connection_file: str = None) -> str:
     Returns:
         Connection status message
     """
-    global kernel_connection, context, shell_socket, iopub_socket
+    global kernel_connection, context, shell_socket, iopub_socket, control_socket
     
     try:
         # Resolve connection file using priority logic
@@ -239,6 +240,8 @@ def connect_to_kernel(connection_file: str = None) -> str:
             shell_socket.close()
         if iopub_socket:
             iopub_socket.close()
+        if control_socket:
+            control_socket.close()
         if context:
             context.term()
         
@@ -261,6 +264,14 @@ def connect_to_kernel(connection_file: str = None) -> str:
             iopub_socket.setsockopt(zmq.SUBSCRIBE, b'')
         except Exception as e:
             return f"❌ Failed to connect to iopub socket {iopub_addr}: {str(e)}"
+        
+        # Control socket for sending interrupts
+        control_socket = context.socket(zmq.DEALER)
+        control_addr = f"tcp://{kernel_connection['ip']}:{kernel_connection['control_port']}"
+        try:
+            control_socket.connect(control_addr)
+        except Exception as e:
+            return f"❌ Failed to connect to control socket {control_addr}: {str(e)}"
         
         return f"✅ Connected to IPython kernel at {kernel_connection['ip']}:{kernel_connection['shell_port']}\n📁 Connection file: {connection_path}\n🔑 Using key: {kernel_connection['key'][:8]}..."
         
@@ -593,7 +604,7 @@ def disconnect_kernel() -> str:
     Returns:
         "✅ Disconnected from kernel" on success, or error message if disconnect fails
     """
-    global kernel_connection, context, shell_socket, iopub_socket
+    global kernel_connection, context, shell_socket, iopub_socket, control_socket
     
     try:
         if shell_socket:
@@ -602,6 +613,9 @@ def disconnect_kernel() -> str:
         if iopub_socket:
             iopub_socket.close()
             iopub_socket = None
+        if control_socket:
+            control_socket.close()
+            control_socket = None
         if context:
             context.term()
             context = None
@@ -611,6 +625,77 @@ def disconnect_kernel() -> str:
         
     except Exception as e:
         return f"❌ Error during disconnection: {str(e)}"
+
+
+@mcp.tool()
+def interrupt_execution(msg_id: str) -> str:
+    """
+    Interrupt a specific non-blocking execution by message ID.
+    
+    Sends an interrupt request to the kernel to cancel the execution while preserving
+    kernel state and other running processes. This is much safer than disconnect_kernel()
+    which would lose all loaded variables and computed state.
+    
+    Args:
+        msg_id: Execution ID returned by execute_code_nonblocking()
+        
+    Returns:
+        Status of the interruption attempt
+    """
+    global kernel_connection, control_socket, pending_executions
+    
+    if not kernel_connection or not control_socket:
+        return "❌ Not connected to kernel. Use connect_to_kernel() first."
+    
+    if msg_id not in pending_executions:
+        return f"❌ No pending execution found with ID: {msg_id}"
+    
+    try:
+        # Create interrupt request message
+        interrupt_msg_id = str(uuid.uuid4())
+        session_id = str(uuid.uuid4())
+        
+        header = {
+            "msg_id": interrupt_msg_id,
+            "username": "ipython-mcp",
+            "session": session_id,
+            "date": datetime.now().isoformat(),
+            "msg_type": "interrupt_request",
+            "version": "5.3",
+        }
+        
+        parent_header = {}
+        metadata = {}
+        content = {}
+        
+        # Prepare message parts
+        msg_parts = [
+            json.dumps(header).encode("utf-8"),
+            json.dumps(parent_header).encode("utf-8"),
+            json.dumps(metadata).encode("utf-8"),
+            json.dumps(content).encode("utf-8"),
+        ]
+        
+        # Sign and send interrupt message to control socket
+        signature = sign_message(msg_parts, kernel_connection["key"])
+        control_socket.send_multipart([
+            b"", 
+            b"<IDS|MSG>", 
+            signature, 
+            msg_parts[0], 
+            msg_parts[1], 
+            msg_parts[2], 
+            msg_parts[3]
+        ])
+        
+        # Mark execution as interrupted (will be cleaned up by status check)
+        if msg_id in pending_executions:
+            pending_executions[msg_id]["interrupted"] = True
+        
+        return f"✅ Interrupt request sent for execution {msg_id}\n💡 Use check_execution() to verify cancellation status"
+        
+    except Exception as e:
+        return f"❌ Failed to send interrupt: {str(e)}"
 
 
 def main():
